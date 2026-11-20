@@ -1,18 +1,138 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { ArrowUpDown, BookOpen, ChevronLeft, Folder, FolderPlus, LayoutGrid, Menu, MoreHorizontal, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { ArrowUpDown, BookOpen, Check, ChevronDown, ChevronLeft, Folder, FolderPlus, LayoutGrid, Menu, MoreHorizontal, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import './style.css'
+import WordDetail from './word-detail'
+import { request } from './api'
+import { AccountGate, Avatar, ProfileEditor } from './account'
+
+function currentWordId() {
+  const match = window.location.hash.match(/^#\/words\/(\d+)$/)
+  return match ? Number(match[1]) : null
+}
 
 async function api(path, method = 'GET', body) {
-  const response = await fetch('/api/' + path, {
-    method,
-    ...(body && { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
-  })
-  const result = await response.json().catch(() => ({}))
-  if (!response.ok || !Array.isArray(result.notes)) {
+  const result = await request(path, method, body)
+  if (!Array.isArray(result.notes)) {
     throw new Error(result.error || 'Could not connect to Lexicon. Try again.')
   }
   return result
+}
+
+function FolderChooser({ folders, defaultValue, disabled }) {
+  const [value, setValue] = useState(defaultValue)
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(0)
+  const root = useRef(null)
+  const trigger = useRef(null)
+  const list = useRef(null)
+  const options = useRef([])
+  const typing = useRef({ text: '', time: 0 })
+  const id = useId()
+  const selected = folders.find(item => item.id === value)
+
+  useEffect(() => {
+    if (!open) return
+    function dismiss(event) {
+      if (!root.current?.contains(event.target)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', dismiss)
+    return () => document.removeEventListener('pointerdown', dismiss)
+  }, [open])
+  useLayoutEffect(() => {
+    if (!open) return
+    const panel = list.current
+    panel.showPopover()
+    function position() {
+      const rect = trigger.current.getBoundingClientRect()
+      const viewport = window.visualViewport
+      const left = viewport?.offsetLeft ?? 0
+      const top = viewport?.offsetTop ?? 0
+      const right = left + (viewport?.width ?? window.innerWidth)
+      const bottom = top + (viewport?.height ?? window.innerHeight)
+      const width = Math.min(rect.width, right - left - 16)
+      panel.style.width = width + 'px'
+      const below = Math.max(0, bottom - rect.bottom - 14)
+      const above = Math.max(0, rect.top - top - 14)
+      const desired = Math.min(240, panel.scrollHeight + 2)
+      const down = below >= desired || below >= above
+      const height = Math.min(desired, down ? below : above)
+      panel.style.maxHeight = height + 'px'
+      panel.style.left = Math.max(left + 8, Math.min(rect.left, right - width - 8)) + 'px'
+      panel.style.top = (down ? rect.bottom + 6 : rect.top - 6 - height) + 'px'
+    }
+    position()
+    const observer = new ResizeObserver(position)
+    observer.observe(trigger.current)
+    observer.observe(panel)
+    window.addEventListener('resize', position)
+    window.addEventListener('scroll', position, true)
+    window.visualViewport?.addEventListener('resize', position)
+    window.visualViewport?.addEventListener('scroll', position)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', position)
+      window.removeEventListener('scroll', position, true)
+      window.visualViewport?.removeEventListener('resize', position)
+      window.visualViewport?.removeEventListener('scroll', position)
+      if (panel.matches(':popover-open')) panel.hidePopover()
+    }
+  }, [open])
+  useEffect(() => {
+    if (!open) return
+    const panel = list.current
+    const option = options.current[active]?.getBoundingClientRect()
+    const bounds = panel.getBoundingClientRect()
+    if (option?.top < bounds.top + 6) panel.scrollTop -= bounds.top + 6 - option.top
+    else if (option?.bottom > bounds.bottom - 6) panel.scrollTop += option.bottom - bounds.bottom + 6
+  }, [active, open])
+  useEffect(() => { if (disabled) setOpen(false) }, [disabled])
+
+  function toggle() {
+    setActive(Math.max(0, folders.findIndex(item => item.id === value)))
+    setOpen(value => !value)
+  }
+  function choose(index) {
+    setValue(folders[index].id)
+    setOpen(false)
+    trigger.current?.focus()
+  }
+  function keyDown(event) {
+    if (event.key === 'Tab') { setOpen(false); return }
+    if (event.key === 'Escape' && open) {
+      event.preventDefault()
+      event.stopPropagation()
+      setOpen(false)
+      return
+    }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault()
+      const current = open ? active : Math.max(0, folders.findIndex(item => item.id === value))
+      setActive(event.key === 'Home' ? 0 : event.key === 'End' ? folders.length - 1 : !open ? current : (current + (event.key === 'ArrowDown' ? 1 : -1) + folders.length) % folders.length)
+      setOpen(true)
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      if (open) choose(active)
+      else toggle()
+    } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      const now = Date.now()
+      const text = (now - typing.current.time < 700 ? typing.current.text : '') + event.key.toLocaleLowerCase()
+      typing.current = { text, time: now }
+      const index = folders.findIndex(item => item.name.toLocaleLowerCase().startsWith(text))
+      if (index >= 0) { event.preventDefault(); setActive(index); setOpen(true) }
+    }
+  }
+
+  return <div className="folder-chooser" ref={root} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false) }}>
+    <span className="field-label" id={id + '-label'}>Folder</span>
+    <input type="hidden" name="folderId" value={value ?? ''} />
+    <button ref={trigger} type="button" className="folder-chooser-trigger" role="combobox" aria-labelledby={id + '-label ' + id + '-value'} aria-haspopup="listbox" aria-expanded={open} aria-controls={id + '-list'} aria-activedescendant={open ? id + '-option-' + active : undefined} disabled={disabled || !folders.length} onClick={toggle} onKeyDown={keyDown}>
+      <Folder className={'ink-' + (selected?.color ?? 'blue')} size={18} /><span id={id + '-value'}>{selected?.name ?? 'Choose a folder'}</span><ChevronDown className={open ? 'chooser-chevron open' : 'chooser-chevron'} size={17} />
+    </button>
+    {open && <div ref={list} popover="manual" id={id + '-list'} className="folder-chooser-list" role="listbox" aria-labelledby={id + '-label'}>
+      {folders.map((item, index) => <div key={item.id} id={id + '-option-' + index} ref={node => { options.current[index] = node }} className={active === index ? 'folder-option active' : 'folder-option'} role="option" aria-selected={item.id === value} onPointerMove={() => setActive(index)} onMouseDown={event => event.preventDefault()} onClick={() => choose(index)}><Folder className={'ink-' + item.color} size={18} /><span>{item.name}</span>{item.id === value && <Check className="folder-check" size={16} />}</div>)}
+    </div>}
+  </div>
 }
 
 function Editor({ edit, folders, close, onSaved }) {
@@ -20,7 +140,10 @@ function Editor({ edit, folders, close, onSaved }) {
   const [busy, setBusy] = useState(false)
   const note = edit.note
   const dialog = useRef(null)
-  useEffect(() => { dialog.current.showModal() }, [])
+  useEffect(() => {
+    dialog.current.showModal()
+    dialog.current.querySelector('input')?.focus()
+  }, [])
   const deleting = edit.type === 'delete'
   const isFolder = edit.type === 'folder'
   const heading = deleting ? 'Delete word?' : isFolder ? 'New folder' : note ? 'Edit word' : 'Add word'
@@ -50,73 +173,23 @@ function Editor({ edit, folders, close, onSaved }) {
 
   return <dialog ref={dialog} onCancel={event => { event.preventDefault(); if (!busy) close() }} aria-labelledby="editor-title">
     <div className="dialog-head"><h2 id="editor-title">{heading}</h2><button className="icon-button" aria-label="Close" disabled={busy} onClick={close}><X size={20} /></button></div>
-    <form onSubmit={submit}>
+    <form className="editor-form" onSubmit={submit}>
+      <div className="editor-fields">
       {deleting ? <p>Delete “{note.title}” from your vocabulary?</p> : isFolder ?
         <label>Folder name<input name="name" placeholder="e.g. Spanish" required maxLength={60} autoFocus /></label> :
         <>
           <label>Word or phrase<input name="title" defaultValue={note?.title} placeholder="e.g. Serendipity" maxLength={120} required autoFocus /></label>
           <label>Description <span>(optional)</span><textarea name="description" defaultValue={note?.description} maxLength={4000} rows={4} placeholder="Add a meaning, translation, or example" /></label>
-          <label>Folder<select name="folderId" defaultValue={note?.folderId ?? edit.folder ?? folders[0]?.id}>
-            {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-          </select></label>
+          <FolderChooser folders={folders} defaultValue={note?.folderId ?? edit.folder ?? folders[0]?.id} disabled={busy} />
         </>}
       {error && <p role="alert" className="error">{error}</p>}
+      </div>
       <div className="dialog-actions">
         <button className="secondary" type="button" onClick={close} disabled={busy}>Cancel</button>
         <button className={deleting ? 'danger' : 'primary'} disabled={busy}>{busy ? 'Saving…' : deleting ? 'Delete word' : isFolder ? 'Create folder' : 'Save word'}</button>
       </div>
     </form>
   </dialog>
-}
-
-function QuickAdd({ folders, folderId, inputRef, onSaved }) {
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [expanded, setExpanded] = useState(false)
-  const [selectedFolder, setSelectedFolder] = useState(folderId ?? folders[0]?.id)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const [status, setStatus] = useState('')
-  const submitting = useRef(false)
-
-  useEffect(() => {
-    setSelectedFolder(folderId ?? folders[0]?.id)
-  }, [folderId, folders[0]?.id])
-
-  async function submit(event) {
-    event.preventDefault()
-    if (submitting.current || !title.trim()) return
-    submitting.current = true
-    setBusy(true)
-    setError('')
-    setStatus('')
-    try {
-      const data = await api('notes', 'POST', { title: title.trim(), description: description.trim(), folderId: selectedFolder })
-      onSaved(data)
-      setStatus('Saved “' + title.trim() + '” to ' + folders.find(item => item.id === selectedFolder)?.name + '.')
-      setTitle('')
-      setDescription('')
-    } catch (failure) {
-      setError(failure.message)
-    } finally {
-      submitting.current = false
-      setBusy(false)
-      requestAnimationFrame(() => inputRef.current?.focus())
-    }
-  }
-
-  return <form className="quick-add" onSubmit={submit} aria-label="Quick add word">
-    <div className="quick-add-row">
-      <Plus size={19} aria-hidden="true" />
-      <input ref={inputRef} aria-label="New word or phrase" placeholder="Save a word or phrase…" maxLength={120} required value={title} disabled={busy} onChange={event => { setTitle(event.target.value); setStatus('') }} />
-      {folderId === null ? <select aria-label="Save word to folder" value={selectedFolder ?? ''} disabled={busy} onChange={event => setSelectedFolder(Number(event.target.value))}>{folders.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select> : <span className="quick-folder"><Folder size={14} />{folders.find(item => item.id === folderId)?.name}</span>}
-      <button className="primary" disabled={busy || !title.trim()}>{busy ? 'Saving…' : 'Save word'}</button>
-    </div>
-    <div className="quick-add-options"><button type="button" className="text-button" aria-expanded={expanded} aria-controls="quick-description" onClick={() => setExpanded(value => !value)}>{expanded ? 'Hide description' : 'Add description'}</button><span>Enter to save</span></div>
-    <div id="quick-description" hidden={!expanded}><label className="sr-only" htmlFor="quick-description-input">Description (optional)</label><textarea id="quick-description-input" placeholder="Meaning, translation, or example (optional)" value={description} disabled={busy} maxLength={4000} rows={3} onChange={event => setDescription(event.target.value)} /></div>
-    {error && <p className="error" role="alert">{error}</p>}
-    <p className="save-status" role="status">{status}</p>
-  </form>
 }
 
 function WordActions({ note, onEdit }) {
@@ -144,7 +217,7 @@ function WordActions({ note, onEdit }) {
   </details>
 }
 
-function App() {
+function App({ user, onProfileUpdate, onLogout, imported }) {
   const [workspace, setWorkspace] = useState(null)
   const [error, setError] = useState('')
   const [folderId, setFolderId] = useState(null)
@@ -153,8 +226,49 @@ function App() {
   const [edit, setEdit] = useState(null)
   const [navigationOpen, setNavigationOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [wordId, setWordId] = useState(currentWordId)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [showImport, setShowImport] = useState(imported > 0)
   const navigationBrand = useRef(null)
-  const quickInput = useRef(null)
+  const listPosition = useRef(0)
+  const lastWord = useRef(null)
+
+  useEffect(() => {
+    const viewport = window.visualViewport
+    const root = document.documentElement
+    function updateViewport() {
+      const visible = window.visualViewport
+      root.style.setProperty('--viewport-height', (visible?.height ?? window.innerHeight) + 'px')
+      root.style.setProperty('--viewport-top', (visible?.offsetTop ?? 0) + 'px')
+    }
+    updateViewport()
+    viewport?.addEventListener('resize', updateViewport)
+    viewport?.addEventListener('scroll', updateViewport)
+    window.addEventListener('resize', updateViewport)
+    return () => {
+      viewport?.removeEventListener('resize', updateViewport)
+      viewport?.removeEventListener('scroll', updateViewport)
+      window.removeEventListener('resize', updateViewport)
+      root.style.removeProperty('--viewport-height')
+      root.style.removeProperty('--viewport-top')
+    }
+  }, [])
+
+  useEffect(() => {
+    function syncRoute() { setWordId(currentWordId()) }
+    window.addEventListener('hashchange', syncRoute)
+    return () => window.removeEventListener('hashchange', syncRoute)
+  }, [])
+  useEffect(() => {
+    if (wordId !== null) window.scrollTo(0, 0)
+    else if (lastWord.current !== null) {
+      const frame = requestAnimationFrame(() => {
+        window.scrollTo(0, listPosition.current)
+        document.querySelector(`[data-note-id="${lastWord.current}"] .word-title`)?.focus({ preventScroll: true })
+      })
+      return () => cancelAnimationFrame(frame)
+    }
+  }, [wordId])
 
   useEffect(() => {
     if (!navigationOpen) return
@@ -189,8 +303,24 @@ function App() {
   ))
   if (alphabetical) visible.sort((a, b) => a.title.localeCompare(b.title))
   const title = term ? 'Search results' : folder?.name ?? 'All words'
+  const selectedNote = notes.find(note => note.id === wordId)
+
+  useEffect(() => {
+    document.title = selectedNote ? selectedNote.title + ' — Lexicon' : 'Lexicon — Personal vocabulary'
+  }, [selectedNote?.title])
+
+  function openWord(id) {
+    listPosition.current = window.scrollY
+    lastWord.current = id
+    window.location.hash = '/words/' + id
+  }
+
+  function closeWord() {
+    window.location.hash = ''
+  }
 
   function navigate(id) {
+    if (wordId !== null) closeWord()
     setFolderId(id)
     setQuery('')
     setNavigationOpen(false)
@@ -213,20 +343,25 @@ function App() {
           <span className={'nav-icon ink-' + item.color} aria-hidden="true"><Folder size={18} /><span className="folder-initial">{Array.from(item.name.trim())[0]?.toLocaleUpperCase()}</span></span><span className="nav-label">{item.name}</span><span className="nav-count">{notes.filter(note => note.folderId === item.id).length}</span>
         </button>)}
       </nav>
-      <div className="sidebar-actions"><button className="nav-item create-folder" aria-label="New folder" title="New folder" disabled={!workspace} onClick={() => setEdit({ type: 'folder' })}><FolderPlus size={20} /><span className="nav-label">New folder</span></button></div>
+      <div className="sidebar-actions"><button className="profile-link" aria-label="Your profile" title={user.full_name + ' · @' + user.username} onClick={() => { setNavigationOpen(false); setProfileOpen(true) }}><Avatar user={user} /><span className="account-info"><strong>{user.full_name}</strong><small>@{user.username}</small></span></button><button className="nav-item create-folder" aria-label="New folder" title="New folder" disabled={!workspace} onClick={() => setEdit({ type: 'folder' })}><FolderPlus size={20} /><span className="nav-label">New folder</span></button></div>
     </aside>
     <main>
+      {wordId !== null ? selectedNote ? <WordDetail key={selectedNote.id} draftScope={user.id} note={selectedNote} folder={folders.find(item => item.id === selectedNote.folderId)} backLabel={term ? 'Search results' : folder?.name ?? 'All words'} onBack={closeWord} onFolder={() => navigate(selectedNote.folderId)} onOpenNavigation={() => setNavigationOpen(true)} onSave={async fields => {
+        const data = await api('notes/' + selectedNote.id, 'PATCH', fields)
+        setWorkspace(data)
+        return data.notes.find(note => note.id === selectedNote.id)
+      }} /> : <div className="content"><button className="text-button" onClick={closeWord}>Back to words</button>{error ? <div className="empty" role="alert"><p>{error}</p><button className="secondary" onClick={load}>Retry</button></div> : !workspace ? <p className="empty" role="status">Loading your word…</p> : <div className="empty"><h1>Word not found</h1><p>This word may have been deleted.</p></div>}</div> : <>
       <header className="topbar">
         <button className="icon-button mobile-menu" aria-label="Open navigation" aria-controls="library-sidebar" aria-expanded={navigationOpen} onClick={() => setNavigationOpen(true)}><Menu size={23} /></button>
         <div className="search"><Search size={19} /><input aria-label="Search words across all folders" placeholder="Search all folders…" value={query} onChange={event => setQuery(event.target.value)} />{query && <button className="icon-button" aria-label="Clear search" onClick={() => setQuery('')}><X size={16} /></button>}</div>
         <button className="primary add-word" disabled={!workspace} onClick={() => {
           if (!folders.length) setEdit({ type: 'folder' })
-          else { quickInput.current?.scrollIntoView({ block: 'center' }); quickInput.current?.focus({ preventScroll: true }) }
+          else setEdit({ type: 'note', folder: folderId })
         }}><Plus size={20} /> Add word</button>
       </header>
       <div className="content">
+        {showImport && <div className="import-notice"><p role="status">Your {imported} existing {imported === 1 ? 'word has' : 'words have'} been added to your account.</p><button className="icon-button" aria-label="Dismiss import notice" onClick={() => setShowImport(false)}><X size={18} /></button></div>}
         <header className="page-heading"><h1>{title}</h1><p>{term ? 'Titles and descriptions · All folders' : `${visible.length} ${visible.length === 1 ? 'word' : 'words'}${folder ? ' in this folder' : ' in your vocabulary'}`}</p></header>
-        {workspace && folders.length > 0 && <QuickAdd folders={folders} folderId={folderId} inputRef={quickInput} onSaved={data => { setWorkspace(data); setQuery('') }} />}
         {workspace && !folders.length && <div className="first-folder"><p>Create a folder to start saving words.</p><button className="secondary" onClick={() => setEdit({ type: 'folder' })}><FolderPlus size={17} />Create folder</button></div>}
         {term && <div className="search-context"><span>Searching all folders for “{query.trim()}”</span><button className="text-button" onClick={() => setQuery('')}>Back to {folder?.name ?? 'all words'}</button></div>}
         <div className="list-heading"><div><h2>{term ? 'Matches' : folder ? 'Folder words' : alphabetical ? 'Saved words' : 'Recent words'}</h2><p aria-live="polite">{visible.length} {visible.length === 1 ? 'word' : 'words'}</p></div>
@@ -234,18 +369,20 @@ function App() {
         </div>
         {error ? <div className="empty" role="alert"><p>{error}</p><button className="secondary" onClick={load}>Retry</button></div> :
           !workspace ? <p role="status" className="empty">Loading your vocabulary…</p> :
-          !visible.length ? <div className="empty"><BookOpen size={24} /><h3>{term ? 'No matching words' : 'No words yet'}</h3><p>{term ? 'Try a different word, meaning, or translation.' : folders.length ? 'Save your first word using the field above.' : 'Your words will appear here once you create a folder.'}</p>{term && <button className="secondary" onClick={() => setQuery('')}>Clear search</button>}</div> :
+          !visible.length ? <div className="empty"><BookOpen size={24} /><h3>{term ? 'No matching words' : 'No words yet'}</h3><p>{term ? 'Try a different word, meaning, or translation.' : folders.length ? 'Choose Add word to save a word or phrase.' : 'Your words will appear here once you create a folder.'}</p>{term && <button className="secondary" onClick={() => setQuery('')}>Clear search</button>}</div> :
           <div className="word-grid">{visible.map(note => {
             const group = folders.find(item => item.id === note.folderId)
-            return <article className="word-card" data-color={group?.color ?? 'blue'} key={note.id}>
+            return <article className="word-card" data-color={group?.color ?? 'blue'} data-note-id={note.id} key={note.id}>
               <div className="card-top"><button type="button" className="tag" disabled={!group} aria-label={group ? 'Open folder ' + group.name : 'Folder unavailable'} onClick={() => navigate(note.folderId)}><Folder size={13} />{group?.name}</button><WordActions note={note} onEdit={setEdit} /></div>
-              <h3><button className="word-title" aria-label={'Edit ' + note.title} onClick={() => setEdit({ type: 'note', note })}>{note.title}</button></h3>
+              <h3><button className="word-title" aria-label={'Read ' + note.title} onClick={() => openWord(note.id)}>{note.title}</button></h3>
               {note.description && <p>{note.description}</p>}
               <time dateTime={note.createdAt}>{new Date(note.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</time>
             </article>
           })}</div>}
       </div>
+      </>}
     </main>
+    {profileOpen && <ProfileEditor user={user} onSaved={onProfileUpdate} onLogout={onLogout} close={() => setProfileOpen(false)} />}
     {edit && <Editor edit={edit} folders={folders} close={() => setEdit(null)} onSaved={data => {
       setWorkspace(data)
       if (edit.type === 'folder') navigate(data.folders.at(-1).id)
@@ -259,4 +396,4 @@ function App() {
   </div>
 }
 
-createRoot(document.getElementById('root')).render(<App />)
+createRoot(document.getElementById('root')).render(<AccountGate>{props => <App key={props.user.id} {...props} />}</AccountGate>)

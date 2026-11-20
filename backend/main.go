@@ -202,29 +202,19 @@ func main() {
 	if path == "" {
 		path = "data/lexicon.json"
 	}
-	s := &store{path: path}
-	raw, err := os.ReadFile(path)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		s.data = exampleData()
-	case err != nil:
+	s, err := loadWorkspace(path, true)
+	if err != nil {
 		log.Fatal(err)
-	default:
-		if err := json.Unmarshal(raw, &s.data); err != nil {
-			log.Fatal(err)
-		}
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/workspace", func(w http.ResponseWriter, r *http.Request) {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		reply(w, 200, s.data)
-	})
-	mux.HandleFunc("POST /api/folders", s.folders)
-	mux.HandleFunc("POST /api/notes", s.notes)
-	mux.HandleFunc("PATCH /api/notes/{id}", s.notes)
-	mux.HandleFunc("DELETE /api/notes/{id}", s.notes)
-	server := &http.Server{Addr: "127.0.0.1:8080", Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second}
+	app, err := newApplication(s, path+".accounts.json")
+	if err != nil {
+		log.Fatal(err)
+	}
+	address := os.Getenv("LEXICON_ADDR")
+	if address == "" {
+		address = "127.0.0.1:8080"
+	}
+	server := &http.Server{Addr: address, Handler: app.routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second}
 	log.Printf("Lexicon API listening on %s", server.Addr)
 	log.Fatal(server.ListenAndServe())
 }
