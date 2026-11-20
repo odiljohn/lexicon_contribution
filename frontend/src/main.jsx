@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client'
 import { ArrowUpDown, BookOpen, Check, ChevronDown, ChevronLeft, Folder, FolderPlus, LayoutGrid, Menu, MoreHorizontal, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import './style.css'
 import WordDetail from './word-detail'
+import { request } from './api'
+import { AccountGate, Avatar, ProfileEditor } from './account'
 
 function currentWordId() {
   const match = window.location.hash.match(/^#\/words\/(\d+)$/)
@@ -10,12 +12,8 @@ function currentWordId() {
 }
 
 async function api(path, method = 'GET', body) {
-  const response = await fetch('/api/' + path, {
-    method,
-    ...(body && { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
-  })
-  const result = await response.json().catch(() => ({}))
-  if (!response.ok || !Array.isArray(result.notes)) {
+  const result = await request(path, method, body)
+  if (!Array.isArray(result.notes)) {
     throw new Error(result.error || 'Could not connect to Lexicon. Try again.')
   }
   return result
@@ -175,7 +173,8 @@ function Editor({ edit, folders, close, onSaved }) {
 
   return <dialog ref={dialog} onCancel={event => { event.preventDefault(); if (!busy) close() }} aria-labelledby="editor-title">
     <div className="dialog-head"><h2 id="editor-title">{heading}</h2><button className="icon-button" aria-label="Close" disabled={busy} onClick={close}><X size={20} /></button></div>
-    <form onSubmit={submit}>
+    <form className="editor-form" onSubmit={submit}>
+      <div className="editor-fields">
       {deleting ? <p>Delete “{note.title}” from your vocabulary?</p> : isFolder ?
         <label>Folder name<input name="name" placeholder="e.g. Spanish" required maxLength={60} autoFocus /></label> :
         <>
@@ -184,6 +183,7 @@ function Editor({ edit, folders, close, onSaved }) {
           <FolderChooser folders={folders} defaultValue={note?.folderId ?? edit.folder ?? folders[0]?.id} disabled={busy} />
         </>}
       {error && <p role="alert" className="error">{error}</p>}
+      </div>
       <div className="dialog-actions">
         <button className="secondary" type="button" onClick={close} disabled={busy}>Cancel</button>
         <button className={deleting ? 'danger' : 'primary'} disabled={busy}>{busy ? 'Saving…' : deleting ? 'Delete word' : isFolder ? 'Create folder' : 'Save word'}</button>
@@ -217,7 +217,7 @@ function WordActions({ note, onEdit }) {
   </details>
 }
 
-function App() {
+function App({ user, onProfileUpdate, onLogout, imported }) {
   const [workspace, setWorkspace] = useState(null)
   const [error, setError] = useState('')
   const [folderId, setFolderId] = useState(null)
@@ -227,9 +227,32 @@ function App() {
   const [navigationOpen, setNavigationOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [wordId, setWordId] = useState(currentWordId)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [showImport, setShowImport] = useState(imported > 0)
   const navigationBrand = useRef(null)
   const listPosition = useRef(0)
   const lastWord = useRef(null)
+
+  useEffect(() => {
+    const viewport = window.visualViewport
+    const root = document.documentElement
+    function updateViewport() {
+      const visible = window.visualViewport
+      root.style.setProperty('--viewport-height', (visible?.height ?? window.innerHeight) + 'px')
+      root.style.setProperty('--viewport-top', (visible?.offsetTop ?? 0) + 'px')
+    }
+    updateViewport()
+    viewport?.addEventListener('resize', updateViewport)
+    viewport?.addEventListener('scroll', updateViewport)
+    window.addEventListener('resize', updateViewport)
+    return () => {
+      viewport?.removeEventListener('resize', updateViewport)
+      viewport?.removeEventListener('scroll', updateViewport)
+      window.removeEventListener('resize', updateViewport)
+      root.style.removeProperty('--viewport-height')
+      root.style.removeProperty('--viewport-top')
+    }
+  }, [])
 
   useEffect(() => {
     function syncRoute() { setWordId(currentWordId()) }
@@ -320,10 +343,10 @@ function App() {
           <span className={'nav-icon ink-' + item.color} aria-hidden="true"><Folder size={18} /><span className="folder-initial">{Array.from(item.name.trim())[0]?.toLocaleUpperCase()}</span></span><span className="nav-label">{item.name}</span><span className="nav-count">{notes.filter(note => note.folderId === item.id).length}</span>
         </button>)}
       </nav>
-      <div className="sidebar-actions"><button className="nav-item create-folder" aria-label="New folder" title="New folder" disabled={!workspace} onClick={() => setEdit({ type: 'folder' })}><FolderPlus size={20} /><span className="nav-label">New folder</span></button></div>
+      <div className="sidebar-actions"><button className="profile-link" aria-label="Your profile" title={user.full_name + ' · @' + user.username} onClick={() => { setNavigationOpen(false); setProfileOpen(true) }}><Avatar user={user} /><span className="account-info"><strong>{user.full_name}</strong><small>@{user.username}</small></span></button><button className="nav-item create-folder" aria-label="New folder" title="New folder" disabled={!workspace} onClick={() => setEdit({ type: 'folder' })}><FolderPlus size={20} /><span className="nav-label">New folder</span></button></div>
     </aside>
     <main>
-      {wordId !== null ? selectedNote ? <WordDetail key={selectedNote.id} note={selectedNote} folder={folders.find(item => item.id === selectedNote.folderId)} backLabel={term ? 'Search results' : folder?.name ?? 'All words'} onBack={closeWord} onFolder={() => navigate(selectedNote.folderId)} onOpenNavigation={() => setNavigationOpen(true)} onSave={async fields => {
+      {wordId !== null ? selectedNote ? <WordDetail key={selectedNote.id} draftScope={user.id} note={selectedNote} folder={folders.find(item => item.id === selectedNote.folderId)} backLabel={term ? 'Search results' : folder?.name ?? 'All words'} onBack={closeWord} onFolder={() => navigate(selectedNote.folderId)} onOpenNavigation={() => setNavigationOpen(true)} onSave={async fields => {
         const data = await api('notes/' + selectedNote.id, 'PATCH', fields)
         setWorkspace(data)
         return data.notes.find(note => note.id === selectedNote.id)
@@ -337,6 +360,7 @@ function App() {
         }}><Plus size={20} /> Add word</button>
       </header>
       <div className="content">
+        {showImport && <div className="import-notice"><p role="status">Your {imported} existing {imported === 1 ? 'word has' : 'words have'} been added to your account.</p><button className="icon-button" aria-label="Dismiss import notice" onClick={() => setShowImport(false)}><X size={18} /></button></div>}
         <header className="page-heading"><h1>{title}</h1><p>{term ? 'Titles and descriptions · All folders' : `${visible.length} ${visible.length === 1 ? 'word' : 'words'}${folder ? ' in this folder' : ' in your vocabulary'}`}</p></header>
         {workspace && !folders.length && <div className="first-folder"><p>Create a folder to start saving words.</p><button className="secondary" onClick={() => setEdit({ type: 'folder' })}><FolderPlus size={17} />Create folder</button></div>}
         {term && <div className="search-context"><span>Searching all folders for “{query.trim()}”</span><button className="text-button" onClick={() => setQuery('')}>Back to {folder?.name ?? 'all words'}</button></div>}
@@ -358,6 +382,7 @@ function App() {
       </div>
       </>}
     </main>
+    {profileOpen && <ProfileEditor user={user} onSaved={onProfileUpdate} onLogout={onLogout} close={() => setProfileOpen(false)} />}
     {edit && <Editor edit={edit} folders={folders} close={() => setEdit(null)} onSaved={data => {
       setWorkspace(data)
       if (edit.type === 'folder') navigate(data.folders.at(-1).id)
@@ -371,4 +396,4 @@ function App() {
   </div>
 }
 
-createRoot(document.getElementById('root')).render(<App />)
+createRoot(document.getElementById('root')).render(<AccountGate>{props => <App key={props.user.id} {...props} />}</AccountGate>)

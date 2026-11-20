@@ -3,9 +3,9 @@ import { ArrowLeft, BookOpen, Folder, Menu, Pencil } from 'lucide-react'
 import { MarkdownDocument } from './word-document'
 import { documentSource, parseDocument } from './document-format'
 
-export default function WordDetail({ note, folder, backLabel, onBack, onFolder, onOpenNavigation, onSave }) {
+export default function WordDetail({ note, folder, draftScope, backLabel, onBack, onFolder, onOpenNavigation, onSave }) {
   const source = documentSource(note)
-  const storageKey = 'lexicon-word-draft-' + note.id
+  const storageKey = 'lexicon-word-draft-' + draftScope + '-' + note.id
   const [draft, setDraft] = useState(() => {
     try { return sessionStorage.getItem(storageKey) ?? source } catch { return source }
   })
