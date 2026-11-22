@@ -1,14 +1,17 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { ArrowUpDown, BookOpen, Check, ChevronDown, ChevronLeft, Folder, FolderPlus, LayoutGrid, Menu, MoreHorizontal, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { ArrowUpDown, BookOpen, Check, ChevronDown, ChevronLeft, Folder, FolderPlus, LayoutGrid, Megaphone, Menu, MoreHorizontal, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import './style.css'
 import WordDetail from './word-detail'
+import News from './news'
 import { request } from './api'
 import { AccountGate, Avatar, ProfileEditor } from './account'
 
-function currentWordId() {
-  const match = window.location.hash.match(/^#\/words\/(\d+)$/)
-  return match ? Number(match[1]) : null
+function currentRoute() {
+  const word = window.location.hash.match(/^#\/words\/(\d+)$/)
+  if (word) return { name: 'word', id: Number(word[1]) }
+  if (window.location.hash === '#/news') return { name: 'news' }
+  return { name: 'list' }
 }
 
 async function api(path, method = 'GET', body) {
@@ -226,7 +229,9 @@ function App({ user, onProfileUpdate, onLogout, imported }) {
   const [edit, setEdit] = useState(null)
   const [navigationOpen, setNavigationOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [wordId, setWordId] = useState(currentWordId)
+  const [route, setRoute] = useState(currentRoute)
+  const wordId = route.name === 'word' ? route.id : null
+  const onList = route.name !== 'news'
   const [profileOpen, setProfileOpen] = useState(false)
   const [showImport, setShowImport] = useState(imported > 0)
   const navigationBrand = useRef(null)
@@ -255,7 +260,7 @@ function App({ user, onProfileUpdate, onLogout, imported }) {
   }, [])
 
   useEffect(() => {
-    function syncRoute() { setWordId(currentWordId()) }
+    function syncRoute() { setRoute(currentRoute()) }
     window.addEventListener('hashchange', syncRoute)
     return () => window.removeEventListener('hashchange', syncRoute)
   }, [])
@@ -306,8 +311,9 @@ function App({ user, onProfileUpdate, onLogout, imported }) {
   const selectedNote = notes.find(note => note.id === wordId)
 
   useEffect(() => {
+    if (route.name === 'news') return
     document.title = selectedNote ? selectedNote.title + ' — Lexicon' : 'Lexicon — Personal vocabulary'
-  }, [selectedNote?.title])
+  }, [selectedNote?.title, route.name])
 
   function openWord(id) {
     listPosition.current = window.scrollY
@@ -320,9 +326,14 @@ function App({ user, onProfileUpdate, onLogout, imported }) {
   }
 
   function navigate(id) {
-    if (wordId !== null) closeWord()
+    if (window.location.hash) window.location.hash = ''
     setFolderId(id)
     setQuery('')
+    setNavigationOpen(false)
+  }
+
+  function openNews() {
+    window.location.hash = '/news'
     setNavigationOpen(false)
   }
 
@@ -336,17 +347,19 @@ function App({ user, onProfileUpdate, onLogout, imported }) {
         <button ref={navigationBrand} className="brand" aria-label="Lexicon — All words" title="Lexicon" onClick={() => navigate(null)}><span className="mark" aria-hidden="true"><i /><i /></span><span className="brand-name">Lexicon</span></button>
       </div>
       <nav aria-label="Vocabulary">
-        <button className={folderId === null ? 'nav-item selected' : 'nav-item'} aria-label="All words" title="All words" aria-current={folderId === null ? 'page' : undefined} onClick={() => navigate(null)}><span className="nav-icon"><LayoutGrid size={18} /></span><span className="nav-label">All words</span><span className="nav-count">{notes.length}</span></button>
+        <button className={onList && folderId === null ? 'nav-item selected' : 'nav-item'} aria-label="All words" title="All words" aria-current={onList && folderId === null ? 'page' : undefined} onClick={() => navigate(null)}><span className="nav-icon"><LayoutGrid size={18} /></span><span className="nav-label">All words</span><span className="nav-count">{notes.length}</span></button>
+        <button className={route.name === 'news' ? 'nav-item selected' : 'nav-item'} aria-label="News" title="News" aria-current={route.name === 'news' ? 'page' : undefined} onClick={openNews}><span className="nav-icon"><Megaphone size={18} /></span><span className="nav-label">News</span></button>
         <div className="nav-heading folders-heading">Folders</div>
         {workspace && !folders.length && <p className="folders-empty">No folders yet</p>}
-        {folders.map(item => <button className={folderId === item.id ? 'nav-item selected' : 'nav-item'} aria-label={item.name} title={item.name} aria-current={folderId === item.id ? 'page' : undefined} key={item.id} onClick={() => navigate(item.id)}>
+        {folders.map(item => <button className={onList && folderId === item.id ? 'nav-item selected' : 'nav-item'} aria-label={item.name} title={item.name} aria-current={onList && folderId === item.id ? 'page' : undefined} key={item.id} onClick={() => navigate(item.id)}>
           <span className={'nav-icon ink-' + item.color} aria-hidden="true"><Folder size={18} /><span className="folder-initial">{Array.from(item.name.trim())[0]?.toLocaleUpperCase()}</span></span><span className="nav-label">{item.name}</span><span className="nav-count">{notes.filter(note => note.folderId === item.id).length}</span>
         </button>)}
       </nav>
       <div className="sidebar-actions"><button className="profile-link" aria-label="Your profile" title={user.full_name + ' · @' + user.username} onClick={() => { setNavigationOpen(false); setProfileOpen(true) }}><Avatar user={user} /><span className="account-info"><strong>{user.full_name}</strong><small>@{user.username}</small></span></button><button className="nav-item create-folder" aria-label="New folder" title="New folder" disabled={!workspace} onClick={() => setEdit({ type: 'folder' })}><FolderPlus size={20} /><span className="nav-label">New folder</span></button></div>
     </aside>
     <main>
-      {wordId !== null ? selectedNote ? <WordDetail key={selectedNote.id} draftScope={user.id} note={selectedNote} folder={folders.find(item => item.id === selectedNote.folderId)} backLabel={term ? 'Search results' : folder?.name ?? 'All words'} onBack={closeWord} onFolder={() => navigate(selectedNote.folderId)} onOpenNavigation={() => setNavigationOpen(true)} onSave={async fields => {
+      {route.name === 'news' ? <News onOpenNavigation={() => setNavigationOpen(true)} /> :
+      wordId !== null ? selectedNote ? <WordDetail key={selectedNote.id} draftScope={user.id} note={selectedNote} folder={folders.find(item => item.id === selectedNote.folderId)} backLabel={term ? 'Search results' : folder?.name ?? 'All words'} onBack={closeWord} onFolder={() => navigate(selectedNote.folderId)} onOpenNavigation={() => setNavigationOpen(true)} onSave={async fields => {
         const data = await api('notes/' + selectedNote.id, 'PATCH', fields)
         setWorkspace(data)
         return data.notes.find(note => note.id === selectedNote.id)
