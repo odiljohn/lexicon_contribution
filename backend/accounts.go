@@ -62,6 +62,7 @@ type application struct {
 	data       accountsData
 	legacy     *store
 	workspaces map[string]*store
+	news       *newsStore
 	attempts   map[string]attemptWindow
 }
 
@@ -110,6 +111,11 @@ func newApplication(legacy *store, path string) (*application, error) {
 		}
 		a.workspaces[user.Profile.ID] = workspace
 	}
+	news, err := loadNews(legacy.path + ".news.json")
+	if err != nil {
+		return nil, err
+	}
+	a.news = news
 	return a, nil
 }
 func (a *application) workspacePath(id string) string {
@@ -537,6 +543,10 @@ func (a *application) routes() http.Handler {
 	for _, pattern := range []string{"POST /api/notes", "PATCH /api/notes/{id}", "DELETE /api/notes/{id}"} {
 		mux.HandleFunc(pattern, a.protect(func(w http.ResponseWriter, r *http.Request, _ account, s *store) { s.notes(w, r) }))
 	}
+	mux.HandleFunc("GET /api/news", a.protect(a.newsList))
+	mux.HandleFunc("POST /api/news", a.protect(a.owner(a.newsCreate)))
+	mux.HandleFunc("PATCH /api/news/{id}", a.protect(a.owner(a.newsModify)))
+	mux.HandleFunc("DELETE /api/news/{id}", a.protect(a.owner(a.newsModify)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" {
